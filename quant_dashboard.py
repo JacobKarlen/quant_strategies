@@ -156,7 +156,7 @@ def quantitative_quality_strategy(df, num_stocks=40):
     # Filter data
     data = data[data['Info - Sector'] != 'Financials']
     data = data[data['Info - Country'] == 'Sweden']
-    data = data[~data['Info - List'].isin(['NGM', 'Spotlight'])]
+    # data = data[~data['Info - List'].isin(['NGM', 'Spotlight'])]
     data = data[data['Market Cap - Current'] >= 500]
 
     # Sort and select top stocks
@@ -247,7 +247,7 @@ def quantitative_value_strategy(df, num_stocks=40):
     # Filter data
     data = data[data['Info - Country'] == 'Sweden']
     data = data[data['Info - Sector'] != 'Financials']
-    data = data[~data['Info - List'].isin(['NGM', 'Spotlight'])]
+    # data = data[~data['Info - List'].isin(['NGM', 'Spotlight'])]
     data = data[data['Market Cap - Current'] >= 500]
 
     # Sort and select top stocks
@@ -264,7 +264,7 @@ def quantitative_momentum_strategy(df, num_stocks=40):
 
     # Filter data
     data = data[data['Info - Country'] == 'Sweden']
-    data = data[~data['Info - List'].isin(['NGM', 'Spotlight'])]
+    # data = data[~data['Info - List'].isin(['NGM', 'Spotlight'])]
     data = data[data['Market Cap - Current'] >= 500]
     data = data[data['F-Score - Point'] > 2]
 

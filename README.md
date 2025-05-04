@@ -8,7 +8,6 @@ Built with Plotly and Dash. Takes an exported Excel file from the saved filter "
 
   * Excludes financial sector companies
   * Focuses on Swedish companies with market cap ≥ 500M
-  * Excludes companies from NGM and Spotlight exchanges
   * Calculates FCFROE (Free Cash Flow Return on Equity)
   * Ranks companies based on combined scores of ROE, ROA, ROIC, and FCFROE
   * Selects top 40 companies with the highest quality rankings
@@ -29,7 +28,6 @@ Built with Plotly and Dash. Takes an exported Excel file from the saved filter "
 
   * Excludes financial sector companies
   * Focuses on Swedish companies with market cap ≥ 500M
-  * Excludes companies from NGM and Spotlight exchanges
   * Ranks companies based on multiple valuation metrics:
     * P/E (Price-to-Earnings)
     * P/B (Price-to-Book)
@@ -42,7 +40,6 @@ Built with Plotly and Dash. Takes an exported Excel file from the saved filter "
 * **Momentum:**
 
   * Focuses on Swedish companies with market cap ≥ 500M
-  * Excludes companies from NGM and Spotlight exchanges
   * Requires F-Score > 2 (financial strength indicator)
   * Ranks companies based on RS Rank (Relative Strength)
   * Selects top 10 companies with the highest RS Rank
