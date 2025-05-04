@@ -93,6 +93,10 @@ app.layout = html.Div([
             ], label="Quality Strategy"),
             
             dbc.Tab([
+                html.Div(id='growth-strategy-table-container', className="mt-3 p-3"),
+            ], label="Growth Strategy"),
+            
+            dbc.Tab([
                 html.Div(id='value-strategy-table-container', className="mt-3 p-3"),
             ], label="Value Strategy"),
             
@@ -108,6 +112,7 @@ app.layout = html.Div([
         # Store components to hold the processed data
         dcc.Store(id='processed-data'),
         dcc.Store(id='quality-selected-stocks', data=[]),
+        dcc.Store(id='growth-selected-stocks', data=[]),
         dcc.Store(id='value-selected-stocks', data=[]),
         dcc.Store(id='momentum-selected-stocks', data=[]),
         dcc.Store(id='current-equity', data=750000),
@@ -158,6 +163,54 @@ def quantitative_quality_strategy(df, num_stocks=40):
     data = data.sort_values(ascending=False, by=['q_rank']).head(num_stocks)
     
     # Rename columns
+    data_renamed = data.rename(columns=column_name_mapping)
+    
+    return data_renamed
+
+def quantitative_growth_strategy(df, num_stocks=40):
+    data = df.copy(deep=True)
+    growth_columns = ['Earnings g. - Growth 1y', 'Earnings g. - Growth 3y', 
+                     'Revenue g. - Growth 1y', 'Revenue g. - Growth 3y']
+
+    # Filter criteria
+    data = data[data['Info - Sector'] != 'Financials']
+    data = data[data['Info - Sector'] != 'Real Estate']  # Exclude real estate too as mentioned
+    data = data[data['Info - Country'] == 'Sweden']
+    data = data[data['Market Cap - Current'] >= 500]
+    
+    # Filter for companies that have been profitable for the last 5 years
+    # Since we don't have 5 years of PE data explicitly, we'll use current PE to ensure profitability
+    data = data[data['P/E - Current'] > 0]
+    
+    # Convert growth metrics to numeric and handle NaN values - with debugging
+    for kpi in growth_columns:
+        # Convert percentage strings to floats if necessary
+        if data[kpi].dtype == object:
+            # Check if the values contain '%' signs
+            if any(str(val).endswith('%') for val in data[kpi].dropna().head()):
+                # Convert percentage strings to float values
+                data[kpi] = data[kpi].astype(str).str.rstrip('%').astype(float) / 100
+        
+        # Convert to numeric
+        data[kpi] = pd.to_numeric(data[kpi], errors='coerce')
+        # Fill NaN values with 0
+        data[kpi].fillna(0, inplace=True)
+    
+    # Rank by growth metrics (higher is better)
+    data['earnings_1y_rank'] = data['Earnings g. - Growth 1y'].rank(ascending=False)
+    data['earnings_3y_rank'] = data['Earnings g. - Growth 3y'].rank(ascending=False)
+    data['revenue_1y_rank'] = data['Revenue g. - Growth 1y'].rank(ascending=False)
+    data['revenue_3y_rank'] = data['Revenue g. - Growth 3y'].rank(ascending=False)
+    
+    # Calculate combined growth rank
+    data['growth_rank'] = (data['earnings_1y_rank'] + 
+                          data['earnings_3y_rank'] + 
+                          data['revenue_1y_rank'] + 
+                          data['revenue_3y_rank']).rank(ascending=True)
+    
+    # Select top 40 companies by growth rank
+    data = data.sort_values(by='growth_rank').head(num_stocks)
+    
     data_renamed = data.rename(columns=column_name_mapping)
     
     return data_renamed
@@ -239,12 +292,14 @@ def update_processed_data(contents, filename):
     
     # Process data for each strategy
     quality_data = quantitative_quality_strategy(df)
+    growth_data = quantitative_growth_strategy(df)
     value_data = quantitative_value_strategy(df)
     momentum_data = quantitative_momentum_strategy(df)
     
     # Store all processed data
     processed_data = {
         'quality': quality_data.to_dict('records'),
+        'growth': growth_data.to_dict('records'),
         'value': value_data.to_dict('records'),
         'momentum': momentum_data.to_dict('records')
     }
@@ -253,6 +308,7 @@ def update_processed_data(contents, filename):
 
 @app.callback(
     [Output('quality-selected-stocks', 'data', allow_duplicate=True),
+     Output('growth-selected-stocks', 'data', allow_duplicate=True),
      Output('value-selected-stocks', 'data', allow_duplicate=True),
      Output('momentum-selected-stocks', 'data', allow_duplicate=True)],
     [Input('processed-data', 'data')],
@@ -260,18 +316,20 @@ def update_processed_data(contents, filename):
 )
 def initialize_selected_stocks(processed_data):
     if processed_data is None:
-        return [], [], []
+        return [], [], [], []
     
     # Initialize selected stocks as top 10 for each strategy
     quality_data = pd.DataFrame(processed_data['quality'])
+    growth_data = pd.DataFrame(processed_data['growth'])
     value_data = pd.DataFrame(processed_data['value'])
     momentum_data = pd.DataFrame(processed_data['momentum'])
     
     quality_selected = quality_data.sort_values(ascending=False, by=['RS Rank']).head(10)['Ticker'].tolist()
+    growth_selected = growth_data.sort_values(ascending=False, by=['RS Rank']).head(10)['Ticker'].tolist()
     value_selected = value_data.sort_values(ascending=False, by=['RS Rank']).head(10)['Ticker'].tolist()
     momentum_selected = momentum_data.sort_values(ascending=False, by=['RS Rank']).head(10)['Ticker'].tolist()
     
-    return quality_selected, value_selected, momentum_selected
+    return quality_selected, growth_selected, value_selected, momentum_selected
 
 # Callback to update equity value
 @app.callback(
@@ -307,7 +365,7 @@ def update_quality_table(processed_data, selected_stocks, equity):
     quality_data['Select'] = quality_data['Ticker'].apply(lambda x: '✅' if x in selected_stocks else '⬜')
     
     # Calculate allocation
-    equity_per_strategy = equity / 3
+    equity_per_strategy = equity / 4
     equity_per_stock = equity_per_strategy / 10
     
     # Add allocation column for selected stocks
@@ -386,6 +444,109 @@ def update_quality_selected_stocks(active_cell, table_data, current_selected):
     
     return current_selected
 
+# Callback to update Growth strategy table
+@app.callback(
+    Output('growth-strategy-table-container', 'children'),
+    [Input('processed-data', 'data'),
+     Input('growth-selected-stocks', 'data'),
+     Input('current-equity', 'data')],
+    prevent_initial_call=True
+)
+def update_growth_table(processed_data, selected_stocks, equity):
+    if processed_data is None:
+        return html.Div("Please upload data first.")
+    
+    # Get growth data
+    growth_data = pd.DataFrame(processed_data['growth'])
+    
+    # Sort by growth rank
+    growth_data = growth_data.sort_values(ascending=False, by=['RS Rank'])
+    
+    # Add selection column using emoji for visual representation
+    selected_stocks = selected_stocks or []
+    growth_data['Select'] = growth_data['Ticker'].apply(lambda x: '✅' if x in selected_stocks else '⬜')
+    
+    # Calculate allocation
+    equity_per_strategy = equity / 4
+    equity_per_stock = equity_per_strategy / 10
+    
+    # Add allocation column for selected stocks
+    growth_data['Allocation'] = 0
+    growth_data.loc[growth_data['Select'] == '✅', 'Allocation'] = equity_per_stock
+    
+    # Create table
+    table = dash_table.DataTable(
+        id='growth-table',
+        columns=[
+            {'name': 'Select', 'id': 'Select'},
+            {'name': 'Ticker', 'id': 'Ticker'},
+            {'name': 'Company', 'id': 'Company'},
+            {'name': 'RS Rank', 'id': 'RS Rank', 'type': 'numeric', 'format': {'specifier': '.2f'}},
+            {'name': 'Growth Rank', 'id': 'growth_rank', 'type': 'numeric', 'format': {'specifier': '.2f'}},
+            {'name': 'Earnings Growth 1Y', 'id': 'Earnings g. - Growth 1y', 'type': 'numeric', 'format': {'specifier': '.2%'}},
+            {'name': 'Earnings Growth 3Y', 'id': 'Earnings g. - Growth 3y', 'type': 'numeric', 'format': {'specifier': '.2%'}},
+            {'name': 'Revenue Growth 1Y', 'id': 'Revenue g. - Growth 1y', 'type': 'numeric', 'format': {'specifier': '.2%'}},
+            {'name': 'Revenue Growth 3Y', 'id': 'Revenue g. - Growth 3y', 'type': 'numeric', 'format': {'specifier': '.2%'}},
+            {'name': 'Allocation', 'id': 'Allocation', 'type': 'numeric', 'format': {'specifier': ',.0f'}}
+        ],
+        data=growth_data.to_dict('records'),
+        editable=False,
+        filter_action="native",
+        sort_action="native",
+        sort_mode="multi",
+        row_selectable=False,
+        cell_selectable=True,
+        style_cell={
+            'textAlign': 'left',
+            'padding': '5px'
+        },
+        style_header={
+            'backgroundColor': 'lightgrey',
+            'fontWeight': 'bold'
+        },
+        style_data_conditional=[
+            {
+                'if': {'row_index': 'odd'},
+                'backgroundColor': 'rgb(248, 248, 248)'
+            },
+            {
+                'if': {'filter_query': '{Select} contains "✅"'},
+                'backgroundColor': 'rgba(0, 128, 0, 0.1)'
+            }
+        ]
+    )
+    
+    return [
+        html.H3("Growth Strategy", className="mb-3"),
+        table
+    ]
+
+# Callback for click-to-select in growth table
+@app.callback(
+    Output('growth-selected-stocks', 'data', allow_duplicate=True),
+    Input('growth-table', 'active_cell'),
+    State('growth-table', 'data'),
+    State('growth-selected-stocks', 'data'),
+    prevent_initial_call=True
+)
+def update_growth_selected_stocks(active_cell, table_data, current_selected):
+    if active_cell is None or table_data is None:
+        return current_selected or []
+    
+    # Only process clicks in the 'Select' column
+    if active_cell['column_id'] == 'Select':
+        row_idx = active_cell['row']
+        ticker = table_data[row_idx]['Ticker']
+        current_selected = current_selected or []
+        
+        # Toggle selection
+        if ticker in current_selected:
+            current_selected.remove(ticker)
+        else:
+            current_selected.append(ticker)
+    
+    return current_selected
+
 # Callback to update Value strategy table
 @app.callback(
     Output('value-strategy-table-container', 'children'),
@@ -409,7 +570,7 @@ def update_value_table(processed_data, selected_stocks, equity):
     value_data['Select'] = value_data['Ticker'].apply(lambda x: '✅' if x in selected_stocks else '⬜')
     
     # Calculate allocation
-    equity_per_strategy = equity / 3
+    equity_per_strategy = equity / 4
     equity_per_stock = equity_per_strategy / 10
     
     # Add allocation column for selected stocks
@@ -511,7 +672,7 @@ def update_momentum_table(processed_data, selected_stocks, equity):
     momentum_data['Select'] = momentum_data['Ticker'].apply(lambda x: '✅' if x in selected_stocks else '⬜')
     
     # Calculate allocation
-    equity_per_strategy = equity / 3
+    equity_per_strategy = equity / 4
     equity_per_stock = equity_per_strategy / 10
     
     # Add allocation column for selected stocks
@@ -592,48 +753,55 @@ def update_momentum_selected_stocks(active_cell, table_data, current_selected):
     Output('aggregated-positions-container', 'children'),
     [Input('processed-data', 'data'),
      Input('quality-selected-stocks', 'data'),
+     Input('growth-selected-stocks', 'data'),
      Input('value-selected-stocks', 'data'),
      Input('momentum-selected-stocks', 'data'),
      Input('current-equity', 'data')]
 )
-def update_aggregated_positions(processed_data, quality_selected, value_selected, momentum_selected, equity):
+def update_aggregated_positions(processed_data, quality_selected, growth_selected, value_selected, momentum_selected, equity):
     if processed_data is None:
         return html.Div("Please upload data first.")
     
     # Get data for each strategy
     quality_data = pd.DataFrame(processed_data['quality'])
+    growth_data = pd.DataFrame(processed_data['growth'])
     value_data = pd.DataFrame(processed_data['value'])
     momentum_data = pd.DataFrame(processed_data['momentum'])
     
     # Ensure selected stocks are lists
     quality_selected = quality_selected or []
+    growth_selected = growth_selected or []
     value_selected = value_selected or []
     momentum_selected = momentum_selected or []
     
     # Filter selected stocks
     quality_selected_data = quality_data[quality_data['Ticker'].isin(quality_selected)][['Ticker', 'Company']]
+    growth_selected_data = growth_data[growth_data['Ticker'].isin(growth_selected)][['Ticker', 'Company']]
     value_selected_data = value_data[value_data['Ticker'].isin(value_selected)][['Ticker', 'Company']]
     momentum_selected_data = momentum_data[momentum_data['Ticker'].isin(momentum_selected)][['Ticker', 'Company']]
     
     # Add strategy column
     quality_selected_data['Strategy'] = 'Quality'
+    growth_selected_data['Strategy'] = 'Growth'
     value_selected_data['Strategy'] = 'Value'
     momentum_selected_data['Strategy'] = 'Momentum'
     
     # Calculate allocations
-    equity_per_strategy = equity / 3
+    equity_per_strategy = equity / 4
     
     # Calculate equity per stock - handle cases with zero stocks selected
     quality_equity_per_stock = equity_per_strategy / len(quality_selected) if len(quality_selected) > 0 else 0
+    growth_equity_per_stock = equity_per_strategy / len(growth_selected) if len(growth_selected) > 0 else 0
     value_equity_per_stock = equity_per_strategy / len(value_selected) if len(value_selected) > 0 else 0
     momentum_equity_per_stock = equity_per_strategy / len(momentum_selected) if len(momentum_selected) > 0 else 0
     
     quality_selected_data['Allocation'] = quality_equity_per_stock
+    growth_selected_data['Allocation'] = growth_equity_per_stock
     value_selected_data['Allocation'] = value_equity_per_stock
     momentum_selected_data['Allocation'] = momentum_equity_per_stock
     
     # Combine all selected stocks
-    all_selected = pd.concat([quality_selected_data, value_selected_data, momentum_selected_data])
+    all_selected = pd.concat([quality_selected_data, growth_selected_data, value_selected_data, momentum_selected_data])
     
     if all_selected.empty:
         return html.Div("No stocks selected. Please select stocks from the strategy tables.")
@@ -704,94 +872,6 @@ def update_aggregated_positions(processed_data, quality_selected, value_selected
             dcc.Graph(figure=fig)
         ])
     ]
-
-# Callbacks to update selected stocks when table is edited
-# @app.callback(
-#     Output('quality-selected-stocks', 'data'),
-#     Input('quality-table', 'data')
-# )
-# def update_quality_selected_stocks(rows):
-#     if not rows:
-#         return []
-    
-#     # Get selected rows
-#     selected_rows = [row for row in rows if row.get('Selected', False)]
-    
-#     # If less than 10 are selected, add more from the top of the list
-#     if len(selected_rows) < 10:
-#         unselected_rows = [row for row in rows if not row.get('Selected', False)]
-#         unselected_rows.sort(key=lambda x: float(x.get('RS Rank', 0)), reverse=True)
-        
-#         # Add more stocks to reach 10
-#         for i in range(10 - len(selected_rows)):
-#             if i < len(unselected_rows):
-#                 selected_rows.append(unselected_rows[i])
-    
-#     # If more than 10 are selected, keep only the top 10 by RS Rank
-#     if len(selected_rows) > 10:
-#         selected_rows.sort(key=lambda x: float(x.get('RS Rank', 0)), reverse=True)
-#         selected_rows = selected_rows[:10]
-    
-#     # Return selected tickers
-#     return [row['Ticker'] for row in selected_rows]
-
-# @app.callback(
-#     Output('value-selected-stocks', 'data'),
-#     Input('value-table', 'data')
-# )
-# def update_value_selected_stocks(rows):
-#     if not rows:
-#         return []
-    
-#     # Get selected rows
-#     selected_rows = [row for row in rows if row.get('Selected', False)]
-    
-#     # If less than 10 are selected, add more from the top of the list
-#     if len(selected_rows) < 10:
-#         unselected_rows = [row for row in rows if not row.get('Selected', False)]
-#         unselected_rows.sort(key=lambda x: float(x.get('RS Rank', 0)), reverse=True)
-        
-#         # Add more stocks to reach 10
-#         for i in range(10 - len(selected_rows)):
-#             if i < len(unselected_rows):
-#                 selected_rows.append(unselected_rows[i])
-    
-#     # If more than 10 are selected, keep only the top 10 by RS Rank
-#     if len(selected_rows) > 10:
-#         selected_rows.sort(key=lambda x: float(x.get('RS Rank', 0)), reverse=True)
-#         selected_rows = selected_rows[:10]
-    
-#     # Return selected tickers
-#     return [row['Ticker'] for row in selected_rows]
-
-# @app.callback(
-#     Output('momentum-selected-stocks', 'data'),
-#     Input('momentum-table', 'data')
-# )
-# def update_momentum_selected_stocks(rows):
-#     if not rows:
-#         return []
-    
-#     # Get selected rows
-#     selected_rows = [row for row in rows if row.get('Selected', False)]
-    
-#     # If less than 10 are selected, add more from the top of the list
-#     if len(selected_rows) < 10:
-#         unselected_rows = [row for row in rows if not row.get('Selected', False)]
-#         unselected_rows.sort(key=lambda x: float(x.get('RS Rank', 0)), reverse=True)
-        
-#         # Add more stocks to reach 10
-#         for i in range(10 - len(selected_rows)):
-#             if i < len(unselected_rows):
-#                 selected_rows.append(unselected_rows[i])
-    
-#     # If more than 10 are selected, keep only the top 10 by RS Rank
-#     if len(selected_rows) > 10:
-#         selected_rows.sort(key=lambda x: float(x.get('RS Rank', 0)), reverse=True)
-#         selected_rows = selected_rows[:10]
-    
-#     # Return selected tickers
-#     return [row['Ticker'] for row in selected_rows]
 
 if __name__ == '__main__':
     app.run(debug=True)
